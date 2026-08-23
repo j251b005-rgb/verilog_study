@@ -1,0 +1,82 @@
+module fifo (
+    input  wire clk,
+    input  wire cs,
+    input  wire [2:0] ca,
+    input  wire rset,
+    inout  wire [7:0] dq
+);
+  reg ract;
+  reg rread;
+  reg rwrite;
+  reg rpre;
+  reg state;
+  
+  parameter WL = 4;
+  parameter RL = 6;
+  parameter BL = 6;
+  parameter MAXDTNU = 5;
+  
+  integer DTNU;
+  
+  always @ (posedge clk) begin
+    if (reset) begin
+            ract   <= 1'b0;
+            rread  <= 1'b0;
+            rwrite <= 1'b0;
+            rpre   <= 1'b0;
+         state <= 1'b0;
+     end
+
+       else if (cs) begin
+          
+        ract   <= 1'b0;
+        rread  <= 1'b0;
+        rwrite <= 1'b0;
+        rpre   <= 1'b0;
+         
+           case (ca)
+                 3'b010: begin
+                   ract  <= 1'b1;
+                   state <= 1'b1;
+                         end
+             
+                 3'b011: begin
+                   if (state) begin
+                    rread <= 1'b1;
+                     
+                   end
+                end
+                  
+                 3'b100: begin    
+                  if (state) begin
+                    rwrite <= 1'b1;
+                    
+                end
+            end
+             
+                 3'b101: begin
+                    if (state) begin
+                    rpre  <= 1'b1;
+                    state <= 1'b0;
+                end
+            end
+             
+                default: begin
+                         end
+            endcase
+                  end
+      end
+
+  task wreal;
+    input clk;
+    input [7:0] dq;
+    begin 
+      if DTNU <= MAXDTNU
+        begin 
+          
+        end
+    end
+   
+endmodule 
+
+
