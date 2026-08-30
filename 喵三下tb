@@ -1,0 +1,639 @@
+// =============================================================================
+
+// 文件名: tb_wff_rff_simple.v
+
+// 描述: WFF/RFF DRAM 简化测试平台（适配 Icarus Verilog）
+
+// 日期: 2026-08-22
+
+// =============================================================================
+
+ 
+
+`timescale 1ns / 1ps
+
+ 
+
+module tb_wff_rff_simple;
+
+ 
+
+    // =========================================================================
+
+    // 参数定义
+
+    // =========================================================================
+
+    parameter CLK_PERIOD = 10;  // 10ns = 100MHz
+
+    parameter WL = 4;
+
+    parameter RL = 6;
+
+    parameter BL = 8;
+
+    parameter tRCD = 2;
+
+    parameter tRP = 2;
+
+    parameter tRAS = 4;
+
+ 
+
+    // =========================================================================
+
+    // 信号定义
+
+    // =========================================================================
+
+    reg         clk_tb;
+
+    reg         rst_n_tb;
+
+    reg         cs_n_tb;
+
+    reg  [5:0]  ca_tb;       // 扩展到6位: CA[5:4]=地址高2位, CA[3:0]=命令
+
+    wire [7:0]  dq_tb;
+
+ 
+
+    // DQ 驱动信号
+
+    reg [7:0]  dq_drive;
+
+    reg        dq_oe;
+
+ 
+
+    // 测试控制
+
+    integer test_pass;
+
+    integer test_fail;
+
+    integer i;
+
+ 
+
+    // 命令定义
+
+    parameter CMD_NOP   = 4'b0000;
+
+    parameter CMD_ACT   = 4'b0001;
+
+    parameter CMD_PRE   = 4'b0010;
+
+    parameter CMD_WR    = 4'b0011;
+
+    parameter CMD_RD    = 4'b0100;
+
+ 
+
+    // =========================================================================
+
+    // DUT 实例化
+
+    // =========================================================================
+
+    wff_rff_dram dut (
+
+        .clk    (clk_tb),
+
+        .rst_n  (rst_n_tb),
+
+        .cs_n   (cs_n_tb),
+
+        .ca     (ca_tb),
+
+        .dq     (dq_tb)
+
+    );
+
+ 
+
+    // DQ 三态控制
+
+    assign dq_tb = dq_oe ? dq_drive : 8'hzz;
+
+ 
+
+    // =========================================================================
+
+    // 时钟生成
+
+    // =========================================================================
+
+    initial begin
+
+        clk_tb = 0;
+
+       forever #(CLK_PERIOD/2) clk_tb = ~clk_tb;
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 任务定义
+
+    // =========================================================================
+
+ 
+
+    // 任务：等待时钟周期
+
+    task wait_cycles;
+
+        input integer cycles;
+
+        integer j;
+
+        begin
+
+            for (j = 0; j < cycles; j = j + 1) begin
+
+                @(posedge clk_tb);
+
+            end
+
+        end
+
+    endtask
+
+ 
+
+    // 任务：发送 NOP
+
+    task send_nop;
+
+        input integer cycles;
+
+        integer j;
+
+        begin
+
+            for (j = 0; j < cycles; j = j + 1) begin
+
+                cs_n_tb = 1;
+
+                ca_tb = CMD_NOP;
+
+                @(posedge clk_tb);
+
+            end
+
+        end
+
+    endtask
+
+ 
+
+    // 任务：发送 ACT
+
+    task send_act;
+
+        input [1:0] addr;  // 扩展到2位地址
+
+        begin
+
+            $display("[%0t ns] 发送 ACT 命令 - 地址: 0x%0h", $time, addr);
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 0;
+
+            // CA[5:4]=地址高2位, CA[3]=命令标识(ACT=1), CA[2:0]=地址低3位
+
+            ca_tb = {addr[1:0], 1'b0, 1'b0, 1'b0, 1'b1};  // CMD_ACT = 4'b0001
+
+            //ca[2:0] = addr[2:0];  // 地址低3位
+
+            //ca[5:4] = addr[4:3];  // 地址高2位
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 1;
+
+            ca_tb = 6'b000000;  // NOP
+
+        end
+
+    endtask
+
+ 
+
+    // 任务：发送 PRE
+
+    task send_pre;
+
+        begin
+
+            $display("[%0t ns] 发送 PRE 命令", $time);
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 0;
+
+            ca_tb = CMD_PRE;
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 1;
+
+            ca_tb = CMD_NOP;
+
+        end
+
+    endtask
+
+ 
+
+    // 任务：发送 WRITE
+
+    task send_write;
+
+        input [7:0] data0, data1, data2, data3, data4, data5, data6, data7;
+
+        integer k;
+
+        reg [7:0] data_array [0:7];
+
+        begin
+
+            data_array[0] = data0;
+
+            data_array[1] = data1;
+
+            data_array[2] = data2;
+
+            data_array[3] = data3;
+
+            data_array[4] = data4;
+
+            data_array[5] = data5;
+
+            data_array[6] = data6;
+
+            data_array[7] = data7;
+
+ 
+
+            $display("[%0t ns] 发送 WRITE 命令", $time);
+
+ 
+
+            // 发送命令
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 0;
+
+            ca_tb = CMD_WR;
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 1;
+
+            ca_tb = CMD_NOP;
+
+ 
+
+            // 等待 WL
+
+            wait_cycles(WL);
+
+ 
+
+            // 驱动数据
+
+            dq_oe = 1;
+
+            for (k = 0; k < 8; k = k + 1) begin
+
+                dq_drive = data_array[k];
+
+                $display("[%0t ns]   写数据[%0d]: 0x%02h", $time, k, data_array[k]);
+
+                @(posedge clk_tb);
+
+            end
+
+ 
+
+            // 释放 DQ
+
+            dq_oe = 0;
+
+            dq_drive = 8'hzz;
+
+        end
+
+    endtask
+
+ 
+
+    // 任务：发送 READ
+
+    task send_read;
+
+        output [7:0] data0, data1, data2, data3, data4, data5, data6, data7;
+
+        integer k;
+
+        reg [7:0] data_array [0:7];
+
+        begin
+
+            $display("[%0t ns] 发送 READ 命令", $time);
+
+ 
+
+            // 发送命令
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 0;
+
+            ca_tb = CMD_RD;
+
+            @(posedge clk_tb);
+
+            cs_n_tb = 1;
+
+            ca_tb = CMD_NOP;
+
+ 
+
+            // 等待 RL
+
+            wait_cycles(RL);
+
+ 
+
+            // 读取数据
+
+            for (k = 0; k < 8; k = k + 1) begin
+
+                @(posedge clk_tb);
+
+                data_array[k] = dq_tb;
+
+              $display("[%0t ns]   读数据[%0d]: 0x%02h", $time, k, dq_tb);
+
+            end
+
+ 
+
+            data0 = data_array[0];
+
+            data1 = data_array[1];
+
+            data2 = data_array[2];
+
+            data3 = data_array[3];
+
+            data4 = data_array[4];
+
+            data5 = data_array[5];
+
+            data6 = data_array[6];
+
+            data7 = data_array[7];
+
+        end
+
+    endtask
+
+ 
+
+    // =========================================================================
+
+    // 测试序列
+
+    // =========================================================================
+
+    reg [7:0] rd0, rd1, rd2, rd3, rd4, rd5, rd6, rd7;
+
+ 
+
+    initial begin
+
+        // 波形记录
+
+        $dumpfile("wff_rff_dram.vcd");
+
+        $dumpvars(0, tb_wff_rff_simple);
+
+ 
+
+        // 初始化
+
+        rst_n_tb = 0;
+
+        cs_n_tb = 1;
+
+        ca_tb = CMD_NOP;
+
+        dq_oe = 0;
+
+        dq_drive = 8'hzz;
+
+        test_pass = 0;
+
+        test_fail = 0;
+
+ 
+
+        // 复位
+
+        repeat(10) @(posedge clk_tb);
+
+        rst_n_tb = 1;
+
+        repeat(5) @(posedge clk_tb);
+
+        rst_n_tb = 0;
+
+ 
+
+        $display("========================================");
+
+        $display("  WFF/RFF DRAM 测试开始");
+
+        $display("========================================\n");
+
+ 
+
+        // ---------------------------------------------------------------------
+
+        // 测试 1: 基本写读（地址0）
+
+        // ---------------------------------------------------------------------
+
+        $display("测试 1: 基本写读 - 地址 0x00");
+
+        $display("--------------------");
+
+ 
+
+        send_act(2'h10);
+
+        send_nop(tRCD);
+
+ 
+
+        send_write(8'hA0, 8'hA1, 8'hA2, 8'hA3, 8'hA4, 8'hA5, 8'hA6, 8'hA7);
+
+        send_nop(5);
+
+ 
+
+        send_read(rd0, rd1, rd2, rd3, rd4, rd5, rd6, rd7);
+
+ 
+
+        // 验证
+
+        if (rd0 == 8'hA0 && rd1 == 8'hA1 && rd2 == 8'hA2 && rd3 == 8'hA3 &&
+
+            rd4 == 8'hA4 && rd5 == 8'hA5 && rd6 == 8'hA6 && rd7 == 8'hA7) begin
+
+            $display("[成功] 数据匹配\n");
+
+            test_pass = test_pass + 1;
+
+        end else begin
+
+            $display("[失败] 数据不匹配\n");
+
+            test_fail = test_fail + 1;
+
+        end
+
+ 
+
+        send_nop(tRAS - tRCD - 5);
+
+        send_pre();
+
+        send_nop(tRP);
+
+ 
+
+        // ---------------------------------------------------------------------
+
+        // 测试 2: 不同地址（使用高位地址）
+
+        // ---------------------------------------------------------------------
+
+        $display("测试 2: 不同地址 - 地址 0x12 (CA[5:4]=01, CA[2:0]=010)");
+
+        $display("--------------------");
+
+ 
+
+        send_act(5'h12);  // 地址 = 01_010 = 0x12
+
+        send_nop(tRCD);
+
+ 
+
+        send_write(8'h50, 8'h51, 8'h52, 8'h53, 8'h54, 8'h55, 8'h56, 8'h57);
+
+        send_nop(5);
+
+ 
+
+        send_read(rd0, rd1, rd2, rd3, rd4, rd5, rd6, rd7);
+
+ 
+
+        // 验证
+
+        if (rd0 == 8'h50 && rd1 == 8'h51 && rd2 == 8'h52 && rd3 == 8'h53 &&
+
+            rd4 == 8'h54 && rd5 == 8'h55 && rd6 == 8'h56 && rd7 == 8'h57) begin
+
+            $display("[pass] 数据匹配\n");
+
+            test_pass = test_pass + 1;
+
+        end else begin
+
+            $display("[fail] 数据不匹配\n");
+
+            test_fail = test_fail + 1;
+
+            //$display("This is rd", rd0, rd1, rd2);
+
+        end
+
+ 
+
+        send_pre();
+
+        send_nop(tRP);
+
+ 
+
+        // ---------------------------------------------------------------------
+
+        // 测试总结
+
+        // ---------------------------------------------------------------------
+
+        repeat(20) @(posedge clk_tb);
+
+ 
+
+        $display("========================================");
+
+        $display("  测试完成");
+
+        $display("========================================");
+
+        $display("  pass: %0d", test_pass);
+
+        $display("  fail: %0d", test_fail);
+
+ 
+
+        if (test_fail == 0) begin
+
+            $display("\n  [成功] 所有测试通过!");
+
+        end else begin
+
+            $display("\n  [失败] 有测试失败");
+
+        end
+
+        $display("========================================\n");
+
+ 
+
+        repeat(10) @(posedge clk_tb);
+
+        $finish;
+
+    end
+
+ 
+
+    // 超时保护
+
+    initial begin
+
+        #100000;  // 100us 超时
+
+        $display("\n[错误] 仿真超时!");
+
+        $finish;
+
+    end
+
+ 
+
+endmodule
