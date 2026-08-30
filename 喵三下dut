@@ -1,0 +1,569 @@
+// =============================================================================
+
+// 文件名: wff_rff_dram_simple.v
+
+// 描述: WFF/RFF DRAM 模型 - 简化版本（适配 Icarus Verilog）
+
+// 功能:
+
+//   - 8 深度的写 FIFO (WFF) 和读 FIFO (RFF)
+
+//   - 支持 ACT/PRE/READ/WRITE 命令
+
+//   - WL=4, RL=6, BL=8
+
+// 日期: 2026-08-22
+
+// =============================================================================
+
+ 
+
+`timescale 1ns / 1ps
+
+ 
+
+module wff_rff_dram (
+
+    // 时钟和复位
+
+    input  wire        clk,           // 时钟信号
+
+    input  wire        rst_n,         // 异步复位（低有效）
+
+ 
+
+    // 命令接口
+
+    input  wire        cs_n,          // 片选信号（低有效）
+
+    input  wire [5:0]  ca,            // 命令/地址总线 (CA[5:4]=地址高2位, CA[3:0]=命令)
+
+ 
+
+    // 数据接口
+
+    inout  wire [7:0]  dq             // 8 位双向数据总线
+
+);
+
+ 
+
+    // =========================================================================
+
+    // 参数定义
+
+    // =========================================================================
+
+    parameter FIFO_DEPTH = 32;        // FIFO 深度 (扩展到32)
+
+    parameter ADDR_WIDTH = 5;         // 地址宽度 (2^5 = 32)
+
+    parameter DATA_WIDTH = 8;         // 数据宽度
+
+    parameter WL = 4;                 // 写延迟
+
+    parameter RL = 6;                 // 读延迟
+
+    parameter BL = 8;                 // 突发长度
+
+ 
+
+    // 命令编码 (使用 CA[3:0])
+
+    parameter CMD_NOP   = 4'b0000;    // 空操作
+
+    parameter CMD_ACT   = 4'b0001;    // 激活命令
+
+    parameter CMD_PRE   = 4'b0010;    // 预充电命令
+
+    parameter CMD_WR    = 4'b0011;    // 写命令
+
+    parameter CMD_RD    = 4'b0100;    // 读命令
+
+ 
+
+    // 状态定义
+
+    parameter STATE_IDLE   = 2'b00;   // 空闲状态
+
+    parameter STATE_ACTIVE = 2'b01;   // 激活状态（可以读写）
+
+    parameter STATE_READ   = 2'b10;   // 读操作中
+
+    parameter STATE_WRITE  = 2'b11;   // 写操作中
+
+ 
+
+    // =========================================================================
+
+    // 内部信号
+
+    // =========================================================================
+
+    reg [1:0] state, state_next;
+
+    reg [ADDR_WIDTH-1:0] active_addr;  // 当前激活的地址
+
+ 
+
+    // 命令解码
+
+    wire cmd_valid;
+
+    wire [3:0] cmd;
+
+ 
+
+    // 主存储阵列
+
+    reg [DATA_WIDTH-1:0] main_mem [0:FIFO_DEPTH-1];
+
+ 
+
+    // 写操作控制
+
+    reg [3:0] wl_cnt;                 // 写延迟计数器
+
+    reg       wl_active;              // 写延迟激活标志
+
+    reg [3:0] wr_burst_cnt;           // 写突发计数器
+
+    reg [DATA_WIDTH-1:0] wr_data_buf [0:7];  // 写数据缓冲
+
+    reg       wr_data_capture;        // 写数据捕获标志
+
+ 
+
+    // 读操作控制
+
+    reg [3:0] rl_cnt;                 // 读延迟计数器
+
+    reg       rl_active;              // 读延迟激活标志
+
+    reg [3:0] rd_burst_cnt;           // 读突发计数器
+
+    reg [DATA_WIDTH-1:0] rd_data_buf [0:7];  // 读数据缓冲
+
+    reg       rd_output_active;       // 读输出激活标志
+
+ 
+
+    // DQ 输出控制
+
+    reg [DATA_WIDTH-1:0] dq_out;
+
+    reg dq_oe;  // DQ 输出使能
+
+ 
+
+    integer i;
+
+ 
+
+    // =========================================================================
+
+    // 命令接口
+
+    // =========================================================================
+
+    assign cmd_valid = ~cs_n;
+
+    assign cmd = ca;
+
+ 
+
+    // DQ 三态控制
+
+    assign dq = dq_oe ? dq_out : 8'hzz;
+
+ 
+
+    // =========================================================================
+
+    // 存储器初始化
+
+    // =========================================================================
+
+    initial begin
+
+        for (i = 0; i < FIFO_DEPTH; i = i + 1) begin
+
+            main_mem[i] = 8'h00;
+
+        end
+
+    end
+
+ 
+
+    // ========================================================================
+
+    // 状态机 - 时序逻辑
+
+    // =========================================================================
+
+    always @(posedge clk or negedge rst_n) begin
+
+        if (rst_n) begin
+
+            state <= STATE_IDLE;
+
+        end else begin
+
+            state <= state_next;
+
+        end
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 状态机 - 组合逻辑
+
+    // =========================================================================
+
+    always @(*) begin
+
+        state_next = state;
+
+ 
+
+        case (state)
+
+            STATE_IDLE: begin
+
+                if (cmd_valid && cmd == CMD_ACT) begin
+
+                    state_next = STATE_ACTIVE;
+
+                end
+
+            end
+
+ 
+
+            STATE_ACTIVE: begin
+
+                if (cmd_valid) begin
+
+                    if (cmd == CMD_PRE) begin
+
+                        state_next = STATE_IDLE;
+
+                    end else if (cmd == CMD_WR) begin
+
+                        state_next = STATE_WRITE;
+
+                    end else if (cmd == CMD_RD) begin
+
+                        state_next = STATE_READ;
+
+                    end
+
+                end
+
+            end
+
+ 
+
+            STATE_WRITE: begin
+
+                if (!wl_active && !wr_data_capture) begin
+
+                    state_next = STATE_ACTIVE;
+
+                end
+
+            end
+
+ 
+
+            STATE_READ: begin
+
+                if (!rl_active && !rd_output_active) begin
+
+                    state_next = STATE_ACTIVE;
+
+                end
+
+            end
+
+ 
+
+            default: state_next = STATE_IDLE;
+
+        endcase
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 地址锁存
+
+    // =========================================================================
+
+    always @(posedge clk or negedge rst_n) begin
+
+        if (rst_n) begin
+
+            active_addr <= 5'b00000;
+
+        end else begin
+
+            if (cmd_valid && cmd == CMD_ACT) begin
+
+                // 地址由 CA[5:4] (高2位) 和 CA[2:0] (低3位) 组成
+
+                active_addr <= {ca[5:4]};
+
+            end
+
+        end
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 写路径控制
+
+    // =========================================================================
+
+    always @(posedge clk or negedge rst_n) begin
+
+        if (rst_n) begin
+
+            wl_cnt <= 4'd0;
+
+            wl_active <= 1'b0;
+
+            wr_burst_cnt <= 4'd0;
+
+            wr_data_capture <= 1'b0;
+
+        end else begin
+
+            // 检测写命令
+
+            if (cmd_valid && cmd == CMD_WR && state == STATE_ACTIVE) begin
+
+                wl_active <= 1'b1;
+
+                wl_cnt <= 4'd0;
+
+                wr_burst_cnt <= 4'd0;
+
+                wr_data_capture <= 1'b0;
+
+            end
+
+            // WL 延迟计数
+
+            else if (wl_active) begin
+
+                if (wl_cnt < (WL - 1)) begin
+
+                    wl_cnt <= wl_cnt + 4'd1;
+
+                end else begin
+
+                    wl_active <= 1'b0;
+
+                    wr_data_capture <= 1'b1;
+
+                end
+
+            end
+
+            // 数据捕获
+
+            else if (wr_data_capture) begin
+
+                if (wr_burst_cnt < BL) begin
+
+                    wr_data_buf[wr_burst_cnt] <= dq;
+
+                    wr_burst_cnt <= wr_burst_cnt + 4'd1;
+
+                  //$display("This is wr data buf", wr_data_buf[wr_burst_cnt]);
+
+                    // 最后一个数据
+
+                    if (wr_burst_cnt == (BL - 1)) begin
+
+                        wr_data_capture <= 1'b0;
+
+                    end
+
+                end
+
+            end
+
+        end
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 写入主存储器
+
+    // =========================================================================
+
+    always @(posedge clk) begin
+
+      if ((wr_data_capture || wr_burst_cnt==BL)&& wr_burst_cnt > 0 && wr_burst_cnt <= BL) begin
+
+            if ((active_addr + wr_burst_cnt ) < FIFO_DEPTH) begin
+
+              main_mem[active_addr + wr_burst_cnt-1] <= wr_data_buf[wr_burst_cnt-1];
+
+              //$display("This is main", main_mem[active_addr + wr_burst_cnt-1]);
+
+            end
+
+        end
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // 读路径控制
+
+    // =========================================================================
+
+    always @(posedge clk or negedge rst_n) begin
+
+        if (rst_n) begin
+
+            rl_cnt <= 4'd0;
+
+            rl_active <= 1'b0;
+
+            rd_burst_cnt <= 4'd0;
+
+            rd_output_active <= 1'b0;
+
+        end else begin
+
+            // 检测读命令
+
+            if (cmd_valid && cmd == CMD_RD && state == STATE_ACTIVE) begin
+
+                rl_active <= 1'b1;
+
+                rl_cnt <= 4'd0;
+
+                rd_burst_cnt <= 4'd0;
+
+                rd_output_active <= 1'b0;
+
+ 
+
+                // 从主存储器读取数据到缓冲区
+
+                for (i = 0; i < BL; i = i + 1) begin
+
+                    if ((active_addr + i) < FIFO_DEPTH) begin
+
+                        rd_data_buf[i] <= main_mem[active_addr + i];
+
+                     
+
+                    end else begin
+
+                        rd_data_buf[i] <= 8'h00;
+
+                    end
+
+                end
+
+            end
+
+            // RL 延迟计数
+
+            else if (rl_active) begin
+
+                if (rl_cnt < (RL-2)) begin
+
+                    rl_cnt <= rl_cnt + 4'd1;
+
+                end else begin
+
+                    rl_active <= 1'b0;
+
+                    rd_output_active <= 1'b1;
+
+                    rd_burst_cnt <= 4'd0;
+
+                end
+
+            end
+
+            // 输出数据
+
+            else if (rd_output_active) begin
+
+                if (rd_burst_cnt < BL) begin
+
+                    rd_burst_cnt <= rd_burst_cnt + 4'd1;
+
+                end else begin
+
+                    rd_output_active <= 1'b0;
+
+                end
+
+            end
+
+        end
+
+    end
+
+ 
+
+    // =========================================================================
+
+    // DQ 输出驱动
+
+    // =========================================================================
+
+    always @(posedge clk or negedge rst_n) begin
+
+        if (rst_n) begin
+
+            dq_out <= 8'h00;
+
+            dq_oe <= 1'b0;
+
+        end else begin
+
+          if (rd_output_active && rd_burst_cnt < BL) begin
+
+                dq_out <= rd_data_buf[rd_burst_cnt];
+
+                dq_oe <= 1'b1;
+
+            end else begin
+
+                dq_out <= 8'hzz;
+
+                dq_oe <= 1'b0;
+
+            end
+
+        end
+
+    end
+
+ 
+
+endmodule
