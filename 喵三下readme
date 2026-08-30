@@ -1,0 +1,6 @@
+tb和dut文件可以直接粘贴到edaplayground中使用
+Tools&Simulators下面的select下拉菜单中选择Icarus Verilog
+Open EPWave after run勾选上可以看波形
+tb视窗下面有个log，仿真结束后可以在log中查看一些信息，比如pass/fail
+tb文件中所有display()内部的中文需要改成英文才能在log中正常显示。
+run之前记住喵三声！！！
